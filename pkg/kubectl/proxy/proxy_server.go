@@ -65,6 +65,9 @@ type FilterServer struct {
 	AcceptHosts []*regexp.Regexp
 	// Methods that match this regexp are rejected
 	RejectMethods []*regexp.Regexp
+	// Required Bearer authentication
+	RequiredBearerAuthorization string
+
 	// The delegate to call to handle accepted requests.
 	delegate http.Handler
 }
@@ -102,7 +105,7 @@ func matchesRegexp(str string, regexps []*regexp.Regexp) bool {
 	return false
 }
 
-func (f *FilterServer) accept(method, path, host string) bool {
+func (f *FilterServer) accept(method, path, host string, request *http.Request) bool {
 	if matchesRegexp(path, f.RejectPaths) {
 		return false
 	}
@@ -110,8 +113,26 @@ func (f *FilterServer) accept(method, path, host string) bool {
 		return false
 	}
 	if matchesRegexp(path, f.AcceptPaths) && matchesRegexp(host, f.AcceptHosts) {
+		if (f.RequiredBearerAuthorization != "") {
+			authorization := request.Header.Get("Authorization")
+			if (authorization == "") {
+				klog.V(3).Infof("No Authorization")
+				return false
+			}
+			if (!strings.HasPrefix(authorization, "Bearer ")) {
+				klog.V(3).Infof("Expected Bearer Authorization")
+				return false
+			}
+			token := authorization[7:]
+			klog.V(3).Infof("Received authorization %s", token)
+			if (f.RequiredBearerAuthorization != token) {
+				klog.V(3).Infof("Bad token received")
+				return false
+			}
+		}
 		return true
 	}
+
 	return false
 }
 
@@ -134,8 +155,13 @@ func extractHost(header string) (host string) {
 
 func (f *FilterServer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	host := extractHost(req.Host)
-	if f.accept(req.Method, req.URL.Path, host) {
+	if f.accept(req.Method, req.URL.Path, host, req) {
 		klog.V(3).Infof("Filter accepting %v %v %v", req.Method, req.URL.Path, host)
+		if (f.RequiredBearerAuthorization != "") {
+			// Delete the Bearer authorization that we received, else it will be forwarded
+			// and authorization will fail
+			req.Header.Del("Authorization")
+		}
 		f.delegate.ServeHTTP(rw, req)
 		return
 	}

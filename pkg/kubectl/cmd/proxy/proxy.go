@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"io/ioutil"
 
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -89,6 +90,8 @@ func NewCmdProxy(f cmdutil.Factory, streams genericclioptions.IOStreams) *cobra.
 	cmd.Flags().String("reject-paths", proxy.DefaultPathRejectRE, "Regular expression for paths that the proxy should reject. Paths specified here will be rejected even accepted by --accept-paths.")
 	cmd.Flags().String("accept-hosts", proxy.DefaultHostAcceptRE, "Regular expression for hosts that the proxy should accept.")
 	cmd.Flags().String("reject-methods", proxy.DefaultMethodRejectRE, "Regular expression for HTTP methods that the proxy should reject (example --reject-methods='POST,PUT,PATCH'). ")
+	cmd.Flags().String("bearer-token", "", "Required Bearer token to authenticate requests.")
+	cmd.Flags().String("bearer-token-file", "", "File containing required Bearer token to authenticate requests.")
 	cmd.Flags().IntP("port", "p", defaultPort, "The port on which to run the proxy. Set to 0 to pick a random port.")
 	cmd.Flags().StringP("address", "", "127.0.0.1", "The IP address on which to serve on.")
 	cmd.Flags().Bool("disable-filter", false, "If true, disable request filtering in the proxy. This is dangerous, and can leave you vulnerable to XSRF attacks, when used with an accessible port.")
@@ -129,11 +132,25 @@ func RunProxy(f cmdutil.Factory, out io.Writer, cmd *cobra.Command) error {
 	if !strings.HasSuffix(apiProxyPrefix, "/") {
 		apiProxyPrefix += "/"
 	}
+
+	bearerToken := cmdutil.GetFlagString(cmd, "bearer-token")
+
+	bearerTokenFile := cmdutil.GetFlagString(cmd, "bearer-token-file")
+	if (bearerTokenFile != "") {
+		data, err := ioutil.ReadFile(bearerTokenFile)
+		if err != nil {
+			return err
+		}
+		bearerToken = strings.Trim(string(data), "\r\n\t")
+		klog.V(4).Infof("Auth -%s-", bearerToken)
+	}
+
 	filter := &proxy.FilterServer{
 		AcceptPaths:   proxy.MakeRegexpArrayOrDie(cmdutil.GetFlagString(cmd, "accept-paths")),
 		RejectPaths:   proxy.MakeRegexpArrayOrDie(cmdutil.GetFlagString(cmd, "reject-paths")),
 		AcceptHosts:   proxy.MakeRegexpArrayOrDie(cmdutil.GetFlagString(cmd, "accept-hosts")),
 		RejectMethods: proxy.MakeRegexpArrayOrDie(cmdutil.GetFlagString(cmd, "reject-methods")),
+		RequiredBearerAuthorization: bearerToken,
 	}
 	if cmdutil.GetFlagBool(cmd, "disable-filter") {
 		if path == "" {
